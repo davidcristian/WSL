@@ -164,12 +164,13 @@ try
     }
 
     entry.StoppingNotified = true;
+    auto unregister = wil::scope_exit([&] { g_pluginManager.UnregisterWslcSession(entry.SessionId); });
     WSLCSessionInformation info{};
     info.SessionId = static_cast<WSLCSessionId>(entry.SessionId);
     info.DisplayName = entry.DisplayName.c_str();
     info.ApplicationPid = entry.CreatorPid;
     info.UserToken = entry.UserToken.get();
-    info.UserSid = entry.UserSid.data();
+    info.UserSid = entry.UserSid.empty() ? nullptr : entry.UserSid.data();
     g_pluginManager.OnWslcSessionStopping(&info);
 }
 CATCH_LOG()
@@ -328,6 +329,7 @@ void WSLCSessionManagerImpl::CreateSession(
         try
         {
             auto& entry = m_sessions.back();
+            g_pluginManager.RegisterWslcSession(sessionId, entry.Ref.get());
             WSLCSessionInformation info{};
             info.SessionId = static_cast<WSLCSessionId>(entry.SessionId);
             info.DisplayName = entry.DisplayName.c_str();
@@ -341,6 +343,7 @@ void WSLCSessionManagerImpl::CreateSession(
             const auto error = wil::ResultFromCaughtException();
 
             // Plugin rejected the session: tear it down before propagating.
+            g_pluginManager.UnregisterWslcSession(sessionId);
             m_sessions.back().StoppingNotified = true; // Don't fire stopping for a session that never started successfully.
             LOG_IF_FAILED(m_sessions.back().Ref->Terminate());
             m_sessions.pop_back();
@@ -700,7 +703,7 @@ wil::com_ptr<IWSLCSession> WSLCSessionManagerImpl::FindSession(ULONG Id)
             result = session;
             return S_OK;
         },
-        PluginManager::IsInWslcNotification());
+        true);
 
     THROW_HR_IF_MSG(WSLC_E_SESSION_NOT_FOUND, !result, "WSLC session %lu not found", Id);
     return result;
